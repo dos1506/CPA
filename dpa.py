@@ -72,11 +72,9 @@ result = list()
 print('--- Calculating Correlation Coefficient ---')
 for pos in tqdm(range(16)):
 # 中間値配列の生成
-#print('---Generating Intermediate Values---')
     V = np.array([[InvSbox(cipherTexts[i][pos] ^ partialKeys[j]) for j in range(256)] for i in range(sample)])
 
 # 中間値からハミング距離モデルへ
-#print('---Mapping Intermediate Values to Hamming Distance Model---')
     H = np.array([[HamDistance(x, cipherTexts[i][pos]) for x in V[i]] for i in range(sample)])
     del V
 
