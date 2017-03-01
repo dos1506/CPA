@@ -34,10 +34,11 @@ def InvSbox(data):
     ]
     return inv_s[data]
 
-# intから2進数文字列を生成 ex. 127 -> 01111111
+# intから2進数文字列を生成  例. 127 -> 01111111
 def Int2BinStr(data):
     return format(data, "08b")
 
+# ハミング距離計算
 def HamDistance(s1, s2):
     return sum(c1 != c2 for c1, c2 in zip(Int2BinStr(s1), Int2BinStr(s2)))
 
@@ -71,8 +72,9 @@ with open(filename) as f:
 
 del filename
 
+# ローパスフィルタの適用
 print('---Applying Low-Pass Filter---')
-n = 100
+n = 500
 fs = 1.25 * math.pow(10, 9)
 fc = 5.0 * math.pow(10, 6)
 nyq = fs / 2.0
@@ -84,13 +86,26 @@ for i in tqdm(range(sample)):
 
 print('--- Calculating Correlation Coefficient ---')
 def calc_corr(pos, T):
+
     # 中間値配列の生成
-    V = np.array([[InvSbox(cipherTexts[i][pos] ^ partialKeys[j]) for j in range(256)] for i in range(sample)])
+    V = np.zeros([sample, 256])
+    for i in range(sample):
+        for j in range(256):
+            V[i][j] = InvSbox(cipherTexts[i][pos] ^ partialKeys[j])
+    
+    #V = np.array([[InvSbox(cipherTexts[i][pos] ^ partialKeys[j]) for j in range(256)] for i in range(sample)])
 
     # 中間値からハミング距離モデルへ
-    H = np.array([[HamDistance(x, cipherTexts[i][pos]) for x in V[i]] for i in range(sample)])
+    H = np.zeros([sample, 256])
+    for i in range(sample):
+        for j in range(256):
+            H[i][j] = HamDistance(x, cipherTexts[i][pos])
+
+    #H = np.array([[HamDistance(x, cipherTexts[i][pos]) for x in V[i]] for i in range(sample)])
+
     del V
 
+    #相関係数の計算
     r = np.zeros([256, numPoint], dtype=np.float64)
     for i in range(256):
         for j in range(numPoint):
@@ -109,7 +124,9 @@ def calc_corr(pos, T):
         plt.savefig('{}/{:02X}.png'.format(path, i))
         plt.clf()
 
-    print('{}: {:02X}'.format(pos, np.argmax([np.amax(list(map(abs, r[i]))) for i in range(256)])))
+    # 最も強い相関係数が見られた値を取り出す
+    corr_peak = np.argmax([np.amax(list(map(abs, r[i]))) for i in range(256))
+    print('{}: {:02X}'.format(pos, corr_peak))
 
 jobs = [
     mp.Process(target=calc_corr, args=(0, T)),
