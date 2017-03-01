@@ -1,4 +1,7 @@
 import json
+import time
+from scipy import signal
+import math
 import sys
 import os.path
 import os
@@ -8,6 +11,7 @@ import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
 import yaml
 from numba.decorators import jit
+import multiprocessing as mp
 
 def InvSbox(data):
     inv_s = [
@@ -60,38 +64,40 @@ with open(path) as f:
 # load power traces
 print('---Loading Power Traces---')
 filename = config['input']
-T = np.zeros([sample, numPoint], dtype=np.int16)
+P = np.zeros([sample, numPoint], dtype=np.int16)
 with open(filename) as f:
     for i in tqdm(range(sample)):
-        T[i] = np.array(f.readline().split(), dtype=np.int16)
+        P[i] = np.array(f.readline().split(), dtype=np.int16)
 
 del filename
 
+print('---Applying Low-Pass Filter---')
+n = 100
+fs = 1.25 * math.pow(10, 9)
+fc = 5.0 * math.pow(10, 6)
+nyq = fs / 2.0
+lpf = signal.firwin(n, fc / nyq)
+T = np.zeros([sample, numPoint], dtype=np.float32)
+for i in tqdm(range(sample)):
+    T[i] = signal.lfilter(lpf, 1, P[i])
 
-result = list()
+
 print('--- Calculating Correlation Coefficient ---')
-for pos in tqdm(range(16)):
-# 中間値配列の生成
-#print('---Generating Intermediate Values---')
+def calc_corr(pos, T):
+    # 中間値配列の生成
     V = np.array([[InvSbox(cipherTexts[i][pos] ^ partialKeys[j]) for j in range(256)] for i in range(sample)])
 
-# 中間値からハミング距離モデルへ
-#print('---Mapping Intermediate Values to Hamming Distance Model---')
+    # 中間値からハミング距離モデルへ
     H = np.array([[HamDistance(x, cipherTexts[i][pos]) for x in V[i]] for i in range(sample)])
     del V
 
-#print('---Calculating Correlation Coefficient---')
+    r = np.zeros([256, numPoint], dtype=np.float64)
+    for i in range(256):
+        for j in range(numPoint):
+            r[i][j] = pearsonr(H.T[i], T.T[j])[0]
 
-    def correlation(numPoint, H, T):
-        r = np.zeros([256, numPoint], dtype=np.float64)
-        for i in tqdm(range(256)):
-            for j in range(numPoint):
-                r[i][j] = pearsonr(H.T[i], T.T[j])[0]
-        return r
 
-    r = correlation(numPoint, H, T)
 
-#print('---Plotting Correlation Coefficient---')
     for i in range(256):
         plt.plot([1e-08 * x * 10**6 for x in range(10000)], r[i])
         plt.ylim(r.min(), r.max())
@@ -103,7 +109,37 @@ for pos in tqdm(range(16)):
         plt.savefig('{}/{:02X}.png'.format(path, i))
         plt.clf()
 
-    result.append('{:02X}'.format(np.argmax([np.amax(list(map(abs, r[i]))) for i in range(256)])))
+    print('{}: {:02X}'.format(pos, np.argmax([np.amax(list(map(abs, r[i]))) for i in range(256)])))
 
-print('The key is: {}'.format(''.join(result)))
+jobs = [
+    mp.Process(target=calc_corr, args=(0, T)),
+    mp.Process(target=calc_corr, args=(1, T)),
+    mp.Process(target=calc_corr, args=(2, T)),
+    mp.Process(target=calc_corr, args=(3, T)),
+    mp.Process(target=calc_corr, args=(4, T)),
+    mp.Process(target=calc_corr, args=(5, T)),
+    mp.Process(target=calc_corr, args=(6, T)),
+    mp.Process(target=calc_corr, args=(7, T)),
+    mp.Process(target=calc_corr, args=(8, T)),
+    mp.Process(target=calc_corr, args=(9, T)),
+    mp.Process(target=calc_corr, args=(10, T)),
+    mp.Process(target=calc_corr, args=(11, T)),
+    mp.Process(target=calc_corr, args=(12, T)),
+    mp.Process(target=calc_corr, args=(13, T)),
+    mp.Process(target=calc_corr, args=(14, T)),
+    mp.Process(target=calc_corr, args=(15, T))
+]
+
+start_at = time.time()
+
+for job in jobs:
+    job.start()
+
+for job in jobs:
+    job.join()
+
+finish_at = time.time()
+print("Elapsed Time: {}[sec]".format(finish_at-start_at))
+
+#print('The key is: {}'.format(''.join(output)))
 

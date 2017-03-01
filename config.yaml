@@ -1,0 +1,6 @@
+input: '200000/WaveForm_DOReg'
+output: '200000/NoCondensor/lpf'
+numPoint: 10000
+numTraces: 200000
+cipherText: '200000/cipherText_200000'
+

@@ -1,13 +1,9 @@
 import json
-import sys
-import os.path
-import os
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
-import yaml
-from numba.decorators import jit
+import multiprocessing as mp
 
 def InvSbox(data):
     inv_s = [
@@ -40,70 +36,71 @@ def HamDistance(s1, s2):
 def HamWeight(s):
     return sum(c != '0' for c in Int2BinStr(s))
 
-
-with open('config.yaml', 'r') as f:
-    config = yaml.load(f)
-
 partialKeys = [x for x in range(256)]
-sample = config['numTraces']
-numPoint = config['numPoint']
+sample = 50000
+numPoint = 3125
+avgCount = 128
 
 # load cipher texts
-print('---Loading Cipher Texts---')
-path = config['cipherText']
-cipherTexts = np.zeros([sample, 16], dtype=np.uint8)
+path = r'bench/001_cipher.txt'
+rawCipherTexts = np.empty((1, 0), dtype=np.uint8)
 with open(path) as f:
     for i in tqdm(range(sample)):
-        cipherTexts[i] = list(map(int, f.readline().split()))
+        line = f.readline().split()
+        rawCipherTexts = np.hstack((rawCipherTexts, np.array(line, dtype=np.uint8).reshape(1, len(line))))  
 
+rawCipherTexts = rawCipherTexts[0]
+cipherTexts = np.array_split(rawCipherTexts, sample)
+del rawCipherTexts, line
 
 # load power traces
-print('---Loading Power Traces---')
-filename = config['input']
-T = np.zeros([sample, numPoint], dtype=np.int16)
+filename = 'bench/001_trace_int.txt'
+#T = np.empty((0, numPoint), dtype=np.uint16)
+
+trace = list()
 with open(filename) as f:
-    for i in tqdm(range(sample)):
-        T[i] = np.array(f.readline().split(), dtype=np.int16)
+    for _ in tqdm(range(sample)):
+        trace.append(list(map(int, f.readline().split())))
+        #T = np.vstack((T, np.array(line, dtype=np.uint16)))
+T = np.array(trace, dtype=np.uint16)
 
-del filename
+del filename, _
 
-
-result = list()
-print('--- Calculating Correlation Coefficient ---')
-for pos in tqdm(range(16)):
 # 中間値配列の生成
-#print('---Generating Intermediate Values---')
-    V = np.array([[InvSbox(cipherTexts[i][pos] ^ partialKeys[j]) for j in range(256)] for i in range(sample)])
+V = np.array([[InvSbox(cipherTexts[i][0] ^ partialKeys[j]) for j in range(256)] for i in range(sample)])
+
+# 中間値からハミング重みモデルへ
+#H = np.array([[HamWeight(cipherTexts[i][0] ^ x) for x in V[i]] for i in range(sample)])
 
 # 中間値からハミング距離モデルへ
-#print('---Mapping Intermediate Values to Hamming Distance Model---')
-    H = np.array([[HamDistance(x, cipherTexts[i][pos]) for x in V[i]] for i in range(sample)])
-    del V
+H = np.array([[HamDistance(x, cipherTexts[i][0]) for x in V[i]] for i in range(sample)])
+del V
 
-#print('---Calculating Correlation Coefficient---')
+r = np.zeros([256, numPoint], dtype=np.float64)
 
-    def correlation(numPoint, H, T):
-        r = np.zeros([256, numPoint], dtype=np.float64)
-        for i in tqdm(range(256)):
-            for j in range(numPoint):
-                r[i][j] = pearsonr(H.T[i], T.T[j])[0]
-        return r
+def CalcRC(queue, H, T):
+    rc = pearsonr(H, T)[0]
+    queue.put(rc)
 
-    r = correlation(numPoint, H, T)
+queue = mp.Queue()
+pool = mp.Pool(2)
 
-#print('---Plotting Correlation Coefficient---')
+for j in tqdm(range(numPoint)):
+    ps = [mp.Process(target=CalcRC, args=(queue, H.T[i], T.T[j])) for i in range(256)]
+    for p in ps:
+        p.start()
     for i in range(256):
-        plt.plot([1e-08 * x * 10**6 for x in range(10000)], r[i])
-        plt.ylim(r.min(), r.max())
-        plt.ylabel('Correlation', fontsize=20)
-        plt.xlabel('Time [$\mu s$]', fontsize=20)
-        path = '{}/{}'.format(config['output'].strip('/'), pos)
-        if os.path.isdir(path) is False:
-            os.makedirs(path)
-        plt.savefig('{}/{:02X}.png'.format(path, i))
-        plt.clf()
+        r[i][j] = queue.get()
 
-    result.append('{:02X}'.format(np.argmax([np.amax(list(map(abs, r[i]))) for i in range(256)])))
 
-print('The key is: {}'.format(''.join(result)))
+for i in tqdm(range(256)):
+    plt.plot(r[i])
+    plt.ylim(-0.1, 0.1)
+    plt.savefig('{}avg/DPA_{}sample/{:02X}.png'.format(avgCount, sample, i))
+    plt.clf()
 
+print('{:02X}'.format(np.argmax([np.amax(list(map(abs, r[i]))) for i in range(256)])))
+
+#for i in tqdm(range(256)):
+#    with open('{:02X}'.format(i), 'w+') as f:
+#        f.write(' '.join(map(str, r[i])))
